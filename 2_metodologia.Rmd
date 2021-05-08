@@ -1,0 +1,225 @@
+---
+title: "Aplicación de reglas de asociación"
+output:
+  html_document: default
+  word_document: default
+---
+#### Cargar librerías y datos
+```{r message=FALSE, warning=FALSE}
+if(!require('arules'))  install.packages('arules')
+if(!require('dplyr'))  install.packages('dplyr')
+if(!require('ggplot2'))  install.packages('ggplot2')
+if(!require('arulesViz'))  install.packages('arulesViz')
+library(arulesViz)
+library(arules)
+library(dplyr)
+library(ggplot2)
+
+#setwd('...')
+
+# Datasets
+df <- read.csv('datos/data_limpio.csv')
+user_artists <- read.csv('datos/user_artists.csv')
+artists <- read.csv('datos/artists_limpio.csv', sep =';')
+```
+
+#### Datos de inetrés
+```{r}
+user_tags <- df[c(1,5)]
+artist_tags <- df[c(2,5)]
+```
+
+#### **Metodología del trabajo**###################################################################################
+
+#### Transacciones de etiquetas por artistas
+```{r warning=FALSE, paged.print=FALSE}
+trans_at <- as(split(artist_tags$tagValue, artist_tags$artistID), "transactions")
+inspect(trans_at[1])
+```
+
+#### Reglas de asociación de etiquetas en base a artistas
+```{r message=FALSE, paged.print=FALSE}
+rules_at <- apriori(trans_at, parameter=list(support=0.01, confidence=0.7))
+inspect(rules_at[1:5])
+sprintf('Cantidad de reglas obtenidas: %s', length(rules_at))
+```
+
+#### Controlar métricas
+```{r}
+# Acceder a métrica lift
+min_lift <-rules_at@quality$lift
+
+# Valor de list mínimo
+min(unlist(min_lift)) 
+```
+
+#### Podar reglas redundantes
+```{r paged.print=FALSE}
+poda_at<-is.redundant(rules_at, measure = "confidence")
+rat_podado <- rules_at[!poda_at]
+inspect(rat_podado[1:5])
+sprintf('Cantidad de reglas podadas: %s', length(rules_at)-length(rat_podado))
+```
+
+```{r eval=FALSE, include=FALSE}
+# Dataframe con reglas
+#ver_reglas <- DATAFRAME(rat_podado)
+```
+
+#### Controlar métricas
+```{r}
+minp_lift <-rat_podado@quality$lift
+
+# Valor de lift mínimo con poda
+min(unlist(minp_lift)) 
+```
+
+#### Scatter plot reglas de asociación
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+plot(rat_podado)
+```
+
+#### **Clústeres de usuarios** ##############################################################
+
+#### Lista de etiquetas por usuario
+```{r paged.print=FALSE}
+lista_gen <- user_tags %>% group_by(userID) %>% summarise(items=paste(sort(tagValue), collapse=", "))
+lista_gen$items[2]
+```
+
+#### Extraer datos del objeto s4 obtenido con *rules_at*
+```{r paged.print=FALSE}
+# Lista de antecedentes y consecuentes
+# setStart y setEnd elimina {} de labels
+l_rules <- list(lhs = labels(lhs(rat_podado), setStart = '', setEnd = ''), 
+                rhs = labels(rhs(rat_podado), setStart = '', setEnd = ''))
+
+# Valores de lift
+v_lift <- rat_podado@quality$lift
+```
+
+#### Proceso de iteración para formar grupos de usuarios
+```{r eval=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# Ejecutar para crear dataframe vacío
+df_cat <- data.frame()
+
+# ITERA PARA COMPARAR RELACIÓN ENTRE ETIQUETAS DE USUARIOS Y ARTISTS ESCUCHADOS
+# Para cada usuario en lista_gen
+for (k in 1:length(lista_gen$userID)){
+  # Paraca cada lhs en rules_at
+  for (i in 1:length(rat_podado)){
+      # Verifica si c/anecedente (lhs) de rules_at se encuentra en la lista de tags de c/usUario 
+      # Devuelve TRUE o FALSE. Tiene en cuenta cuando hay 2 o más antecedentes:
+      # Ej. con dos lhs devuelve: (TRUE,TRUE) => TRUE / (TRUE,FALSE) => FALSE / (FALSE,FALSE) => FALSE
+      log <- sapply(unlist(strsplit(l_rules$lhs[i], split=",")), function(x) grepl(x, lista_gen$items[k]))
+      if (all(log)){
+          # Crea lista con datos de interés
+          l<-list(userID=lista_gen$userID[k], categoria=l_rules$rhs[i], lift=v_lift[i])
+          #support=v_supp[i],confidence=v_conf[i], lhs=l_rules$lhs[i])
+          # Transpone fila y crea dataframe
+          tdf<-data.frame(t(sapply(l,c)))
+          # Enlaza fila a dataframe
+          df_cat <- rbind(df_cat, tdf)
+      }
+  }
+  if (k %% 50 == 0) {print(k)}
+}
+
+```
+
+```{r eval=FALSE, include=FALSE}
+# Guardar resultados
+#write.csv(df_cat, file = "data_clean/df_cat.csv", row.names = FALSE)
+```
+
+#### Cargar datos ya iterados
+```{r}
+df_cat <- read.csv('datos/df_cat.csv', sep =',')
+```
+
+#### Agrupar etiquetas similares en cada usuario y sumar valores de lift
+```{r}
+# Convertir lift de dataframe en valor numérico y redondear
+df_cat$lift <-round(as.numeric(as.character(df_cat$lift)), digits =2)
+
+# Agrupar por categorias
+gr <- df_cat %>%
+        group_by(userID, categoria) %>%
+        summarise(n_cat=n(), sum_lift=sum(lift))
+```
+
+#### Elegir etiqueta de máximo lift para cada usuario
+```{r}
+# Categoría máxima elegida por usuario
+gr_max <-  gr %>% 
+           group_by(userID) %>% 
+           top_n(1, n_cat)
+
+# Elegir categoria con lift máximo
+gr_maxl <- gr_max %>% 
+           group_by(userID) %>% 
+           top_n(1, sum_lift)
+
+sprintf('Cantidad de usuarios clasificados: %s', nrow(gr_maxl))
+```
+
+#### Cantidad de grupos y de usuarios por grupo
+```{r}
+# Agrupo y sumo
+cnt_c <- gr_maxl %>%
+  group_by(categoria) %>%
+  summarise(cant_users = n())
+sprintf('Cantidad de clústeres: %s', nrow(cnt_c))
+```
+
+#### Buscar artistas de usuarios en un clúster
+```{r}
+# Cluster de usuarios "alternative"
+cluster <- gr_maxl %>% filter(categoria=='alternative')
+
+# lista de usuarios "alternative"
+lf<-cluster$userID
+
+# Filtrar usuarios del clúster "alternative" en la tabla de artistas escuchados por los usuarios
+filtro_c <- user_artists[user_artists$userID %in% lf,]
+
+# Join con nombres de artistas
+jf <- merge(filtro_c,artists, by = 'artistID')
+
+# Columnas de interés
+ci <- jf[c(2,4)]
+```
+
+#### Transacciones de etiquetas por usuario
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+# Crear transacciones
+tr <- as(split(ci$name, ci$userID), "transactions")
+```
+
+#### Reglas de asociación para recomendaciones de artistas
+```{r paged.print=FALSE}
+#alternative
+ra <- apriori(tr, parameter=list(support=0.1, confidence=0.70))
+inspect(ra[1:10])
+```
+
+#### Métricas adicionales
+```{r paged.print=FALSE}
+# Calcular hyperlift y agregar a la tabla de métricas
+hl <- interestMeasure(ra, measure ='hyperLift', transactions = tr)
+quality(ra) <- cbind(quality(ra), hl)
+inspect(ra[1:10])
+```
+
+#### Poda de reglas redundantes
+```{r paged.print=FALSE}
+poda<-is.redundant(ra, measure = "confidence")
+ra_podado <- ra[!poda]
+sprintf('Cantidad de reglas podadas: %s', length(ra)-length(ra_podado))
+```
+
+#### Visualizar reglas de asociación
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+plot(ra_podado, method='graph', alpha = 1, main='Gráfico de asociaciones')
+```
+

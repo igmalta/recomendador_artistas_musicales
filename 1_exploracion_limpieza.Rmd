@@ -1,0 +1,250 @@
+---
+title: "Exploración y limpieza de datos"
+output:
+  html_document: default
+  pdf_document: default
+---
+#### Cargar librerías y datos
+```{r message=FALSE, warning=FALSE}
+if(!require('arules'))  install.packages('arules')
+if(!require('arulesViz'))  install.packages('arulesViz')
+if(!require('dplyr'))  install.packages('dplyr')
+if(!require('ggplot2'))  install.packages('ggplot2')
+if(!require('wordcloud2'))  install.packages('wordcloud2')
+library(wordcloud2)
+library(arulesViz)
+library(arules)
+library(dplyr)
+library(ggplot2)
+
+#setwd('')
+
+# Datasets
+user_taggedartists <- read.csv('datos/user_taggedartists.csv')
+tags <- read.csv('datos/tags.csv')
+artists <- read.csv('datos/artists_limpio.csv', sep=';')
+```
+
+#### **Exploración con datos originales** ########################################################################
+
+#### Join tablas *user_taggedartists* y *tags* por *tagID*
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+join<- unique(merge(user_taggedartists,tags, by = 'tagID'))
+join <- join[c(2,3,1,7)]
+head(join)
+```
+
+#### Estimar cantidad de *tags* distintos usados en *join*
+```{r}
+frec_generos <- join %>%
+  group_by(tagValue) %>%
+  summarise(n = n())
+sprintf('Cantidad de etiquetas diferentes: %s de 11946', nrow(frec_generos))
+```
+
+#### Graficar etiquetas más usadas
+```{r, fig.width = 10}
+# Ordenar de mayor a menor n
+s_frec <-arrange(frec_generos,-n)
+
+# Filtrar más frecuentes
+frec_mayor <- s_frec %>% filter(n>440)
+
+# Ordenar por mayor frecuencia
+frec_mayor$n1 <- reorder(frec_mayor$tagValue, -frec_mayor$n)
+
+# Graficar
+g<- ggplot(frec_mayor, aes(n1, n ))
+g + geom_bar(stat="identity", width = 0.6, fill="tomato2") + 
+      labs(title="Frecuencia de etiquetas más usadas",
+           x='Etiqueta',
+           y= 'Cantidad de veces usada',
+           caption="") +
+      theme(axis.text.x = element_text(angle=90, vjust=0, size=10)) +
+      theme(plot.margin = unit(c(1,1,1,1), "cm"))
+```
+
+#### Graficar etiquetas más frecuentes con nubes de palabras
+```{r}
+ wordcloud2(frec_generos, size=1.5, color='random-light', shape='triangle')
+```
+
+#### Artistas más escuchados
+```{r}
+# Agrupar por ID de artistas
+frec_artists <- join %>%
+  group_by(artistID) %>%
+  summarise(n = n())
+
+# Join 
+frecj_artists<- merge(frec_artists,artists, by = 'artistID', all.x=TRUE)
+frecj_artists<- frecj_artists[c(3,2)]
+
+sprintf('Cantidad de artistas diferentes escuchados: %s de 17632', nrow(frec_artists))
+```
+
+#### Graficar artistas más escuchados
+```{r}
+# Ordenar de mayor a menor n
+a_frec <-arrange(frecj_artists,-n)
+
+# Filtrar más frecuentes
+a_mayor <- a_frec %>% filter(n>243)
+
+# Ordenar por mayor frecuencia
+a_mayor$n1 <- reorder(a_mayor$name, -a_mayor$n)
+
+# Graficar 50 artistas más escuchados
+g<- ggplot(a_mayor, aes(n1, n ))
+g + geom_bar(stat="identity", width = 0.6, fill="tomato2") + 
+    #geom_text(aes(label=n), vjust=-0.5, size=3.5, angle=90) +
+      labs(title="Frecuencia de artistas más escuchados",
+           x='Artista',
+           y= 'Cantidad de veces escuchado',
+           caption="") +
+      theme(axis.text.x = element_text(angle=90, vjust=0, size=10)) +
+      theme(plot.margin = unit(c(1,1,1,1), "cm"))
+```
+
+#### **Preparación de los datos de trabajo** #########################################################################
+
+#### Cargar datasets limpiados en *Openrefine* y *Excel*
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+tagsFiltrado <- read.csv('datos/tags_limpio.csv', sep=';')
+artistsFiltrado <- read.csv('datos/artists_limpio.csv', sep=';')
+```
+
+#### Join tablas limpias por *tagID*
+```{r paged.print=TRUE}
+join_clean <- unique(merge(user_taggedartists,tagsFiltrado, by = 'tagID'))
+head(join_clean)
+```
+
+#### Join con nombres de artistas
+```{r}
+join_filtrado <- merge(join_clean,artistsFiltrado, by = 'artistID',  all.x = TRUE)
+colnames(join_filtrado)[8] <- 'artistName'
+join_filtrado <- join_filtrado[c(3,1,8,2,7)]
+head(join_filtrado)
+```
+
+#### Cantidad de etiquetas disponibles
+```{r}
+tagsF <- tagsFiltrado %>%
+  group_by(tagValue) %>%
+  summarise(n = n())
+sprintf('Cantidad de etiquetas disponibles luego de la limpieza: %s de 11946', nrow(tagsF))
+```
+
+#### Cantidad de etiquetas utilizadas 
+```{r}
+frec_generos_f <- join_filtrado %>%
+  group_by(tagValue) %>%
+  summarise(n = n())
+sprintf('Cantidad de etiquetas utilizadas luego de la limpieza: %s de 9749', nrow(frec_generos_f))
+```
+
+#### Cantidad de artistas disponibles
+```{r}
+artistsF <- artistsFiltrado %>%
+  group_by(name) %>%
+  summarise(n = n())
+sprintf('Cantidad de artistas disponibles luego de la limpieza: %s de 17632', nrow(artistsF))
+```
+
+#### Cantidad de artistas utilizados 
+```{r}
+frec_artists_f <- join_filtrado %>%
+  group_by(artistName) %>%
+  summarise(n = n())
+sprintf('Cantidad de artistas utilizados luego de la limpieza: %s de 12523', nrow(frec_artists_f))
+```
+
+#### Frecuencia de asignaciones de etiquetas distintas
+```{r}
+fg_cat <- frec_generos_f$n
+
+#Discretizar la cantidad de asignaciones
+fg_cat[frec_generos_f$n<5] <- '1-4'
+fg_cat[frec_generos_f$n>=5 & frec_generos_f$n < 50] <- '5-49'
+fg_cat[frec_generos_f$n>=50 & frec_generos_f$n < 100] <- '50-99'
+fg_cat[frec_generos_f$n>=100 & frec_generos_f$n < 1000] <- '100-999'
+fg_cat[frec_generos_f$n>=1000] <- '1000+'
+
+# Ordenar tabla de valores
+ord <- c('1-4','5-49','50-99','100-999','1000+')
+f1 <- factor(fg_cat,levels=ord)
+f2 <-sort(f1)
+
+# Imprimir gráfico de barras
+barplot(table(f2), main="Cantidad de asignaciones de etiquetas distintas", 
+  	xlab="Número de asignaciones", ylab="Número de etiquetas distintas",
+  	col=c("tomato2"),
+  	cex.main=1.7,
+  	cex.lab=1.5)
+```
+
+#### Filtrar etiquetas más usadas y contrastar con asignaciones
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+# Filtrar etiquetas con >= 50 veces asignadas
+frec_mayor_f <- frec_generos_f %>% filter(n>=50)
+
+# Filtrar etiquetas con < 50 veces asignadas
+cnt_menor_f <- (frec_generos_f %>% filter(n<50))
+
+# Porcentaje => 25470
+porcentaje_f <- sum(cnt_menor_f$n)/nrow(join_filtrado)*100
+
+# Resumen
+sprintf('Porcentaje etiquetas asignadas con frecuencia < 50: %s %% de 186479', round(porcentaje_f, digits = 2))
+sprintf('Cantidad etiquetas con frecuencia >= 50: %s', nrow(frec_mayor_f))
+sprintf('Cantidad de etiquetas asignadas con frecuencia < 50: %s', sum(cnt_menor_f$n))
+sprintf('Cantidad de etiquetas asignadas con frecuencia >= 50: %s', sum(frec_mayor_f$n))
+```
+
+#### Nube de palabras con etiquetas filtradas
+```{r}
+wordcloud2(frec_mayor_f, size=1.5, color='random-light', shape='triangle')
+```
+
+#### Eliminar etiquetas con frecuencia baja
+```{r}
+# Etiquetas asignadas menos de 50 veces
+l_remove <- cnt_menor_f[[1]]
+
+# Eliminar filas de etiquetas menos frecuentes
+tags_max <- join_filtrado[!join_filtrado$tagValue %in% l_remove,]
+```
+
+#### Verificar resultados
+```{r}
+# Cantidad de etiquetas 
+test_limpieza <- tags_max %>%
+  group_by(tagValue) %>%
+  summarise(n = n())
+res <- if (nrow(test_limpieza) == nrow(frec_mayor_f)){'OK'} else {'!ERROR'}
+sprintf('Cantidad de etiquetas: %s ==> %s', nrow(test_limpieza), res)
+
+# Cantidad de usuarios
+test_users<- tags_max %>%
+  group_by(userID) %>%
+  summarise(n = n())
+sprintf('Cantidad de usuarios: %s de 1892 (dataset crudo)', nrow(test_users))
+
+# Cantidad de artistas
+test_artists<- tags_max %>%
+  group_by(artistName) %>%
+  summarise(n = n())
+sprintf('Cantidad de artistas: %s de 11714 (dataset crudo)', nrow(test_artists))
+```
+
+#### Dataset de trabajo
+```{r}
+head(tags_max)
+```
+
+```{r eval=FALSE, include=FALSE}
+# Guardar dataset de trabajo
+#write.csv(tags_max, file = "data_clean/data_limpio.csv", row.names = FALSE)
+```
+
